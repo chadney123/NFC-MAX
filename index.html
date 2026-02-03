@@ -3,17 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Continuous Shift Tracker</title>
+    <title>Shift Tracker</title>
     <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#2ecc71">
     <style>
         body { transition: background-color 0.6s ease; background-color: #2ecc71; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; color: white; text-align: center; overflow: hidden; }
         .amber { background-color: #f39c12 !important; }
+        .red { background-color: #e74c3c !important; }
         #status { font-size: 2.2rem; font-weight: bold; margin-bottom: 10px; }
         #sub-status { font-size: 1.1rem; opacity: 0.9; margin-bottom: 30px; height: 1.2em; }
         #input-container { width: 100%; display: flex; flex-direction: column; align-items: center; }
         input { padding: 18px; font-size: 1.4rem; border-radius: 12px; border: none; margin-bottom: 20px; width: 85%; max-width: 350px; text-align: center; color: #333; }
         button { padding: 20px 50px; font-size: 1.3rem; cursor: pointer; border: none; border-radius: 50px; background: white; color: #2ecc71; font-weight: bold; }
-        #info { position: fixed; bottom: 15px; font-size: 0.75rem; opacity: 0.5; }
+        #lock-info { position: fixed; bottom: 15px; font-size: 0.75rem; opacity: 0.5; }
     </style>
 </head>
 <body>
@@ -23,13 +25,18 @@
 
     <div id="input-container">
         <input type="text" id="userName" placeholder="Type Name Here..." autocomplete="off">
-        <button id="startBtn">Begin Shift</button>
+        <button id="startBtn">Initialize Kiosk</button>
     </div>
 
-    <div id="lock-info">Wake Lock: Inactive | Daily Reset: 08:00 AM</div>
+    <div id="lock-info">Wake Lock: Inactive | Reset: 08:00 AM</div>
 
     <script>
-        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw1zfywpTM4ALHBRuIgDRTX8X5uBfQbR4Y7yRgjTg9FGKgD8jU_tKIhdmHBvXYFr0G7/exec"; 
+        // PWA Service Worker Registration
+        if ('serviceWorker' in navigator) {
+            navigator.serviceWorker.register('sw.js');
+        }
+
+        const WEB_APP_URL = "YOUR_GOOGLE_SCRIPT_URL_HERE"; 
         
         const body = document.body;
         const statusDisplay = document.getElementById('status');
@@ -40,153 +47,106 @@
         
         let activeTag = null; 
         let breadcrumbs = [];
-        let gpsWatchId = null;
         let isProcessing = false;
         let wakeLock = null;
 
-        // --- 1. CONTINUOUS GPS WATCH ---
         function startGlobalTracking() {
             if ("geolocation" in navigator) {
-                gpsWatchId = navigator.geolocation.watchPosition((pos) => {
+                navigator.geolocation.watchPosition((pos) => {
                     const now = new Date();
                     const totalMins = (now.getHours() * 60) + now.getMinutes();
-                    
-                    // Tracking window: 02:45 - 08:00
                     if (totalMins >= 165 && totalMins < 480) {
-                        const pt = `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`;
                         if (pos.coords.accuracy < 30) {
+                            const pt = `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`;
                             if (breadcrumbs[breadcrumbs.length - 1] !== pt) {
                                 breadcrumbs.push(pt);
                             }
                         }
                     }
-                }, 
-                (err) => console.warn("GPS Signal Lost: ", err), 
-                { 
-                    enableHighAccuracy: true, 
-                    maximumAge: 0,            
-                    timeout: 5000             
-                });
+                }, null, { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
             }
         }
 
-        // --- 2. DATA SYNC ---
         async function syncToSheet(tagText, action) {
             let mapLink = "N/A";
             if (action === "OUT" && breadcrumbs.length > 0) {
                 mapLink = "https://www.google.com/maps/dir/" + breadcrumbs.join("/");
             }
-
-            const payload = { 
-                tagText: tagText, 
-                name: nameInput.value, 
-                action: action, 
-                location: mapLink,
-                timestamp: new Date().toISOString() 
-            };
-
+            const payload = { tagText, name: nameInput.value, action, location: mapLink, timestamp: new Date().toISOString() };
             fetch(WEB_APP_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
         }
 
-        // --- 3. NFC MULTI-SCAN LOGIC ---
-async function startNFC() {
-    if ("NDEFReader" in window) {
-        try {
-            const ndef = new NDEFReader();
-            await ndef.scan();
-            ndef.onreading = ({ message, serialNumber }) => {
-                if (isProcessing) return;
-                
-                let chipText = "";
-                const decoder = new TextDecoder();
-                for (const record of message.records) {
-                    if (record.recordType === "text") chipText = decoder.decode(record.data);
-                }
-                const currentId = chipText || serialNumber;
+        async function startNFC() {
+            if ("NDEFReader" in window) {
+                try {
+                    const ndef = new NDEFReader();
+                    await ndef.scan();
+                    ndef.onreading = ({ message, serialNumber }) => {
+                        if (isProcessing) return;
+                        
+                        let chipText = "";
+                        const decoder = new TextDecoder();
+                        for (const record of message.records) {
+                            if (record.recordType === "text") chipText = decoder.decode(record.data);
+                        }
+                        const currentId = chipText || serialNumber;
 
-                // 1. CLOCK IN LOGIC
-                if (!activeTag) {
-                    activeTag = currentId;
-                    body.classList.add('amber');
-                    statusDisplay.innerText = "Location Active";
-                    subStatus.innerText = "Logged at: " + currentId;
-                    syncToSheet(currentId, "IN");
-                } 
-                // 2. CLOCK OUT LOGIC (Correct Tag)
-                else if (activeTag === currentId) {
-                    syncToSheet(currentId, "OUT");
-                    activeTag = null;
-                    breadcrumbs = []; 
-                    body.classList.remove('amber');
-                    statusDisplay.innerText = "Location Cleared";
-                    subStatus.innerText = "Ready for next Location";
-                    setTimeout(() => {
-                        statusDisplay.innerText = "Shift in Progress";
-                        subStatus.innerText = "Scan NFC to log movement";
-                    }, 2500);
-                } 
-                // 3. WRONG TAG LOGIC
-                else {
-                    const originalSub = subStatus.innerText;
-                    statusDisplay.innerText = "Wrong Tag!";
-                    subStatus.innerText = "Must scan: " + activeTag;
-                    
-                    // Visual feedback: brief red pulse or darker amber
-                    body.style.backgroundColor = "#e74c3c"; 
-                    setTimeout(() => {
-                        body.style.backgroundColor = ""; // Reverts to CSS class color
-                        statusDisplay.innerText = "Location Active";
-                        subStatus.innerText = originalSub;
-                    }, 3000);
-                }
+                        if (!activeTag) {
+                            activeTag = currentId;
+                            body.classList.add('amber');
+                            statusDisplay.innerText = "Location Active";
+                            subStatus.innerText = "Logged at: " + currentId;
+                            syncToSheet(currentId, "IN");
+                        } else if (activeTag === currentId) {
+                            syncToSheet(currentId, "OUT");
+                            activeTag = null;
+                            breadcrumbs = []; 
+                            body.classList.remove('amber');
+                            statusDisplay.innerText = "Location Cleared";
+                            subStatus.innerText = "Ready for next Location";
+                            setTimeout(() => {
+                                statusDisplay.innerText = "Shift in Progress";
+                                subStatus.innerText = "Scan NFC to log movement";
+                            }, 2500);
+                        } else {
+                            // WRONG TAG LOGIC
+                            const oldStatus = statusDisplay.innerText;
+                            const oldSub = subStatus.innerText;
+                            statusDisplay.innerText = "Wrong Tag!";
+                            subStatus.innerText = "Scan " + activeTag + " to exit";
+                            body.classList.add('red');
+                            setTimeout(() => {
+                                body.classList.remove('red');
+                                statusDisplay.innerText = oldStatus;
+                                subStatus.innerText = oldSub;
+                            }, 3000);
+                        }
+                        isProcessing = true;
+                        setTimeout(() => isProcessing = false, 3000);
+                    };
+                } catch (e) { console.error(e); }
+            }
+        }
 
-                isProcessing = true;
-                setTimeout(() => isProcessing = false, 3000);
-            };
-        } catch (e) { alert("NFC Error: Check HTTPS/Permissions"); }
-    }
-}
-
-        // --- 4. WAKE LOCK ---
         async function requestWakeLock() {
             if ('wakeLock' in navigator) {
                 try {
                     wakeLock = await navigator.wakeLock.request('screen');
                     lockInfo.innerText = "Wake Lock: Active | Reset: 08:00 AM";
-                } catch (err) { 
-                    console.error(`${err.name}, ${err.message}`); 
-                }
+                } catch (err) { console.error(err); }
             }
         }
 
-        // --- 5. INITIALIZE SHIFT (Consolidated) ---
         document.getElementById('startBtn').onclick = async () => { 
-            const name = nameInput.value.trim();
-            if(!name) return alert("Please enter your name to start.");
-            
-            // UI Switch
+            if(!nameInput.value.trim()) return alert("Enter name");
             inputContainer.style.display = 'none';
-            statusDisplay.innerText = "Starting Shift...";
-            
-            // Core Functions
+            statusDisplay.innerText = "Starting...";
             startGlobalTracking();
             await startNFC();
             await requestWakeLock();
-
-            statusDisplay.innerText = "Shift Started: " + name;
-            subStatus.innerText = "Scan NFC to begin first log";
-            };
-
-        // --- 6. DAILY 8AM RESET ---
-        function scheduleMorningReset() {
-            const now = new Date();
-            const resetTime = new Date();
-            resetTime.setHours(8, 0, 0, 0);
-            if (now > resetTime) resetTime.setDate(resetTime.getDate() + 1);
-            setTimeout(() => { location.reload(); }, resetTime - now);
-        }
-        scheduleMorningReset();
-        
+            statusDisplay.innerText = "Shift Active: " + nameInput.value;
+            subStatus.innerText = "Scan NFC to begin";
+        };
     </script>
 </body>
 </html>
