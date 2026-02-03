@@ -31,13 +31,9 @@
     <div id="lock-info">Wake Lock: Inactive | Reset: 08:00 AM</div>
 
     <script>
-        // PWA Service Worker Registration
-        if ('serviceWorker' in navigator) {
-            navigator.serviceWorker.register('sw.js');
-        }
+        if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
 
         const WEB_APP_URL = "YOUR_GOOGLE_SCRIPT_URL_HERE"; 
-        
         const body = document.body;
         const statusDisplay = document.getElementById('status');
         const subStatus = document.getElementById('sub-status');
@@ -45,11 +41,31 @@
         const inputContainer = document.getElementById('input-container');
         const lockInfo = document.getElementById('lock-info');
         
-        let activeTag = null; 
-        let breadcrumbs = [];
+        let activeTag = localStorage.getItem('activeTag') || null; 
+        let breadcrumbs = JSON.parse(localStorage.getItem('breadcrumbs')) || [];
         let isProcessing = false;
         let wakeLock = null;
 
+        // --- 1. PERSISTENT WAKE LOCK ---
+        async function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    lockInfo.innerText = "Wake Lock: ACTIVE | High Accuracy GPS";
+                } catch (err) {
+                    lockInfo.innerText = "Wake Lock: Error - Re-trying...";
+                }
+            }
+        }
+
+        // Heartbeat to keep screen alive in Pinned Mode
+        setInterval(() => {
+            if (inputContainer.style.display === 'none' && (!wakeLock || wakeLock.released)) {
+                requestWakeLock();
+            }
+        }, 10000);
+
+        // --- 2. GPS TRACKING ---
         function startGlobalTracking() {
             if ("geolocation" in navigator) {
                 navigator.geolocation.watchPosition((pos) => {
@@ -60,6 +76,7 @@
                             const pt = `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`;
                             if (breadcrumbs[breadcrumbs.length - 1] !== pt) {
                                 breadcrumbs.push(pt);
+                                localStorage.setItem('breadcrumbs', JSON.stringify(breadcrumbs));
                             }
                         }
                     }
@@ -67,15 +84,17 @@
             }
         }
 
+        // --- 3. DATA SYNC ---
         async function syncToSheet(tagText, action) {
             let mapLink = "N/A";
             if (action === "OUT" && breadcrumbs.length > 0) {
                 mapLink = "https://www.google.com/maps/dir/" + breadcrumbs.join("/");
             }
-            const payload = { tagText, name: nameInput.value, action, location: mapLink, timestamp: new Date().toISOString() };
+            const payload = { tagText, name: localStorage.getItem('userName'), action, location: mapLink, timestamp: new Date().toISOString() };
             fetch(WEB_APP_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
         }
 
+        // --- 4. NFC & WRONG TAG LOGIC ---
         async function startNFC() {
             if ("NDEFReader" in window) {
                 try {
@@ -83,7 +102,6 @@
                     await ndef.scan();
                     ndef.onreading = ({ message, serialNumber }) => {
                         if (isProcessing) return;
-                        
                         let chipText = "";
                         const decoder = new TextDecoder();
                         for (const record of message.records) {
@@ -93,60 +111,77 @@
 
                         if (!activeTag) {
                             activeTag = currentId;
-                            body.classList.add('amber');
-                            statusDisplay.innerText = "Location Active";
-                            subStatus.innerText = "Logged at: " + currentId;
+                            localStorage.setItem('activeTag', activeTag);
+                            updateUI("Location Active", "Logged at: " + currentId, 'amber');
                             syncToSheet(currentId, "IN");
                         } else if (activeTag === currentId) {
                             syncToSheet(currentId, "OUT");
                             activeTag = null;
-                            breadcrumbs = []; 
-                            body.classList.remove('amber');
-                            statusDisplay.innerText = "Location Cleared";
-                            subStatus.innerText = "Ready for next Location";
-                            setTimeout(() => {
-                                statusDisplay.innerText = "Shift in Progress";
-                                subStatus.innerText = "Scan NFC to log movement";
-                            }, 2500);
+                            breadcrumbs = [];
+                            localStorage.removeItem('activeTag');
+                            localStorage.removeItem('breadcrumbs');
+                            updateUI("Location Cleared", "Ready for next Location", '');
+                            setTimeout(() => { updateUI("Shift in Progress", "Scan NFC to log", ''); }, 2500);
                         } else {
-                            // WRONG TAG LOGIC
+                            // WRONG TAG ALERT
                             const oldStatus = statusDisplay.innerText;
                             const oldSub = subStatus.innerText;
-                            statusDisplay.innerText = "Wrong Tag!";
-                            subStatus.innerText = "Scan " + activeTag + " to exit";
-                            body.classList.add('red');
-                            setTimeout(() => {
-                                body.classList.remove('red');
-                                statusDisplay.innerText = oldStatus;
-                                subStatus.innerText = oldSub;
-                            }, 3000);
+                            updateUI("Wrong Tag!", "Scan " + activeTag + " to exit", 'red');
+                            setTimeout(() => { updateUI(oldStatus, oldSub, activeTag ? 'amber' : ''); }, 3000);
                         }
                         isProcessing = true;
                         setTimeout(() => isProcessing = false, 3000);
                     };
-                } catch (e) { console.error(e); }
+                } catch (e) { setTimeout(startNFC, 5000); }
             }
         }
 
-        async function requestWakeLock() {
-            if ('wakeLock' in navigator) {
-                try {
-                    wakeLock = await navigator.wakeLock.request('screen');
-                    lockInfo.innerText = "Wake Lock: Active | Reset: 08:00 AM";
-                } catch (err) { console.error(err); }
-            }
+        function updateUI(status, sub, bgColorClass) {
+            statusDisplay.innerText = status;
+            subStatus.innerText = sub;
+            body.className = bgColorClass;
         }
 
-        document.getElementById('startBtn').onclick = async () => { 
-            if(!nameInput.value.trim()) return alert("Enter name");
+        // --- 5. INITIALIZE & RECOVERY ---
+        async function initShift(name) {
             inputContainer.style.display = 'none';
-            statusDisplay.innerText = "Starting...";
+            localStorage.setItem('userName', name);
             startGlobalTracking();
-            await startNFC();
-            await requestWakeLock();
-            statusDisplay.innerText = "Shift Active: " + nameInput.value;
-            subStatus.innerText = "Scan NFC to begin";
+            startNFC();
+            requestWakeLock();
+            
+            if (activeTag) {
+                updateUI("Location Active", "Resumed at: " + activeTag, 'amber');
+            } else {
+                updateUI("Shift Active: " + name, "Scan NFC to begin", '');
+            }
+        }
+
+        document.getElementById('startBtn').onclick = () => {
+            const name = nameInput.value.trim();
+            if (!name) return alert("Enter name");
+            initShift(name);
         };
+
+        // AUTO-RECOVER ON REFRESH
+        window.onload = () => {
+            const savedName = localStorage.getItem('userName');
+            if (savedName) {
+                initShift(savedName);
+            }
+        };
+
+        function scheduleMorningReset() {
+            const now = new Date();
+            const resetTime = new Date();
+            resetTime.setHours(8, 0, 0, 0);
+            if (now > resetTime) resetTime.setDate(resetTime.getDate() + 1);
+            setTimeout(() => { 
+                localStorage.clear(); 
+                location.reload(); 
+            }, resetTime - now);
+        }
+        scheduleMorningReset();
     </script>
 </body>
 </html>
