@@ -88,48 +88,63 @@
         }
 
         // --- 3. NFC MULTI-SCAN LOGIC ---
-        async function startNFC() {
-            if ("NDEFReader" in window) {
-                try {
-                    const ndef = new NDEFReader();
-                    await ndef.scan();
-                    ndef.onreading = ({ message, serialNumber }) => {
-                        if (isProcessing) return;
-                        
-                        let chipText = "";
-                        const decoder = new TextDecoder();
-                        for (const record of message.records) {
-                            if (record.recordType === "text") chipText = decoder.decode(record.data);
-                        }
-                        const currentId = chipText || serialNumber;
-
-                        if (!activeTag) {
-                            activeTag = currentId;
-                            body.classList.add('amber');
-                            statusDisplay.innerText = "Location Active";
-                            subStatus.innerText = "Logged at: " + currentId;
-                            syncToSheet(currentId, "IN");
-                        } else if (activeTag === currentId) {
-                            syncToSheet(currentId, "OUT");
-                            activeTag = null;
-                            breadcrumbs = []; // Clear breadcrumbs for next leg
-                            body.classList.remove('amber');
-                            statusDisplay.innerText = "Location Cleared";
-                            subStatus.innerText = "Ready for next Location";
-                            setTimeout(() => {
-                                statusDisplay.innerText = "Shift in Progress";
-                                subStatus.innerText = "Scan NFC to log movement";
-                            }, 2500);
-                        }
-
-                        isProcessing = true;
-                        setTimeout(() => isProcessing = false, 3000);
-                    };
-                } catch (e) {
-                    console.error("NFC Scan failed: ", e);
+async function startNFC() {
+    if ("NDEFReader" in window) {
+        try {
+            const ndef = new NDEFReader();
+            await ndef.scan();
+            ndef.onreading = ({ message, serialNumber }) => {
+                if (isProcessing) return;
+                
+                let chipText = "";
+                const decoder = new TextDecoder();
+                for (const record of message.records) {
+                    if (record.recordType === "text") chipText = decoder.decode(record.data);
                 }
-            }
-        }
+                const currentId = chipText || serialNumber;
+
+                // 1. CLOCK IN LOGIC
+                if (!activeTag) {
+                    activeTag = currentId;
+                    body.classList.add('amber');
+                    statusDisplay.innerText = "Location Active";
+                    subStatus.innerText = "Logged at: " + currentId;
+                    syncToSheet(currentId, "IN");
+                } 
+                // 2. CLOCK OUT LOGIC (Correct Tag)
+                else if (activeTag === currentId) {
+                    syncToSheet(currentId, "OUT");
+                    activeTag = null;
+                    breadcrumbs = []; 
+                    body.classList.remove('amber');
+                    statusDisplay.innerText = "Location Cleared";
+                    subStatus.innerText = "Ready for next Location";
+                    setTimeout(() => {
+                        statusDisplay.innerText = "Shift in Progress";
+                        subStatus.innerText = "Scan NFC to log movement";
+                    }, 2500);
+                } 
+                // 3. WRONG TAG LOGIC
+                else {
+                    const originalSub = subStatus.innerText;
+                    statusDisplay.innerText = "Wrong Tag!";
+                    subStatus.innerText = "Must scan: " + activeTag;
+                    
+                    // Visual feedback: brief red pulse or darker amber
+                    body.style.backgroundColor = "#e74c3c"; 
+                    setTimeout(() => {
+                        body.style.backgroundColor = ""; // Reverts to CSS class color
+                        statusDisplay.innerText = "Location Active";
+                        subStatus.innerText = originalSub;
+                    }, 3000);
+                }
+
+                isProcessing = true;
+                setTimeout(() => isProcessing = false, 3000);
+            };
+        } catch (e) { alert("NFC Error: Check HTTPS/Permissions"); }
+    }
+}
 
         // --- 4. WAKE LOCK ---
         async function requestWakeLock() {
@@ -159,12 +174,7 @@
 
             statusDisplay.innerText = "Shift Started: " + name;
             subStatus.innerText = "Scan NFC to begin first log";
-                   }
-                }, 3000);
-            } else {
-                statusDisplay.innerText = "Wrong Tag!";
-            }
-        }
+            };
 
         // --- 6. DAILY 8AM RESET ---
         function scheduleMorningReset() {
