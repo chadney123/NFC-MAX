@@ -18,8 +18,17 @@
 </head>
 <body>
 
+    <div id="status">Welcome</div>
+    <div id="sub-status">Enter name to start shift</div>
 
-  <script>
+    <div id="input-container">
+        <input type="text" id="userName" placeholder="Type Name Here..." autocomplete="off">
+        <button id="startBtn">Begin Shift</button>
+    </div>
+
+    <div id="lock-info">Wake Lock: Inactive | Daily Reset: 08:00 AM</div>
+
+    <script>
         const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw1zfywpTM4ALHBRuIgDRTX8X5uBfQbR4Y7yRgjTg9FGKgD8jU_tKIhdmHBvXYFr0G7/exec"; 
         
         const body = document.body;
@@ -28,7 +37,6 @@
         const nameInput = document.getElementById('userName');
         const inputContainer = document.getElementById('input-container');
         const lockInfo = document.getElementById('lock-info');
-    
         
         let activeTag = null; 
         let breadcrumbs = [];
@@ -36,8 +44,7 @@
         let isProcessing = false;
         let wakeLock = null;
 
-    
-     // --- 1. CONTINUOUS GPS WATCH ---
+        // --- 1. CONTINUOUS GPS WATCH ---
         function startGlobalTracking() {
     if ("geolocation" in navigator) {
         gpsWatchId = navigator.geolocation.watchPosition((pos) => {
@@ -66,7 +73,7 @@
     }
 }
 
-     // --- 2. DATA SYNC ---
+        // --- 2. DATA SYNC ---
         async function syncToSheet(tagText, action) {
             // If it's an "OUT" scan, we attach the full path collected SO FAR
             let mapLink = "N/A";
@@ -85,7 +92,7 @@
             fetch(WEB_APP_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
         }
 
-      // --- 3. NFC MULTI-SCAN LOGIC ---
+        // --- 3. NFC MULTI-SCAN LOGIC ---
         async function startNFC() {
             if ("NDEFReader" in window) {
                 const ndef = new NDEFReader();
@@ -117,16 +124,17 @@
                         subStatus.innerText = "Ready for next Location";
                         setTimeout(() => {
                             statusDisplay.innerText = "Shift in Progress";
-                            subStatus.innerText = "Scan NFC to log";
+                            subStatus.innerText = "Scan NFC to log movement";
                         }, 2500);
-                  }
-                }, 3000);
-            } else {
-                statusDisplay.innerText = "Wrong Tag!";
+                    }
+
+                    isProcessing = true;
+                    setTimeout(() => isProcessing = false, 3000);
+                };
             }
         }
 
-     // --- 4. INITIALIZE SHIFT ---
+        // --- 4. INITIALIZE SHIFT ---
         document.getElementById('startBtn').onclick = async () => { 
             const name = nameInput.value.trim();
             if(!name) return alert("Please enter your name to start the shift.");
@@ -159,11 +167,20 @@
         }
         scheduleMorningReset();
 
+        // --- 2. WAKE LOCK ---
+        async function requestWakeLock() {
+            try {
+                wakeLock = await navigator.wakeLock.request('screen');
+                lockInfo.innerText = "Wake Lock: Active | Reset: 08:00 AM";
+            } catch (err) { console.error(err); }
+        }
+
         document.getElementById('startBtn').onclick = () => { 
             if(!nameInput.value.trim()) return alert("Enter name");
             startNFC(); requestWakeLock();
             inputContainer.style.visibility = 'hidden'; 
         };
+        
     </script>
 </body>
 </html>
