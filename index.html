@@ -36,11 +36,14 @@
         const subStatus = document.getElementById('sub-status');
         const nameInput = document.getElementById('userName');
         const inputContainer = document.getElementById('input-container');
+        const lockInfo = document.getElementById('lock-info');
+    
         
         let activeTag = null; 
         let breadcrumbs = [];
         let gpsWatchId = null;
         let isProcessing = false;
+        let wakeLock = null;
 
     
      // --- 1. CONTINUOUS GPS WATCH ---
@@ -165,13 +168,11 @@
         }
         scheduleMorningReset();
 
-        // --- 2. WAKE LOCK ---
-        async function requestWakeLock() {
-            try {
-                wakeLock = await navigator.wakeLock.request('screen');
-                lockInfo.innerText = "Wake Lock: Active | Reset: 08:00 AM";
-            } catch (err) { console.error(err); }
-        }
+        document.getElementById('startBtn').onclick = () => { 
+            if(!nameInput.value.trim()) return alert("Enter name");
+            startNFC(); requestWakeLock();
+            inputContainer.style.visibility = 'hidden'; 
+        };
     </script>
 </body>
 </html>
