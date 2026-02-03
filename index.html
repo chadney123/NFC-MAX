@@ -1,148 +1,173 @@
-<script>
-    const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw1zfywpTM4ALHBRuIgDRTX8X5uBfQbR4Y7yRgjTg9FGKgD8jU_tKIhdmHBvXYFr0G7/exec"; 
-    
-    const body = document.body;
-    const statusDisplay = document.getElementById('status');
-    const subStatus = document.getElementById('sub-status');
-    const nameInput = document.getElementById('userName');
-    const inputContainer = document.getElementById('input-container');
-    const lockInfo = document.getElementById('lock-info');
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Continuous Shift Tracker</title>
+    <style>
+        body { transition: background-color 0.6s ease; background-color: #2ecc71; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; margin: 0; color: white; text-align: center; overflow: hidden; }
+        .amber { background-color: #f39c12 !important; }
+        #status { font-size: 2.2rem; font-weight: bold; margin-bottom: 10px; }
+        #sub-status { font-size: 1.1rem; opacity: 0.9; margin-bottom: 30px; height: 1.2em; }
+        #input-container { width: 100%; display: flex; flex-direction: column; align-items: center; }
+        input { padding: 18px; font-size: 1.4rem; border-radius: 12px; border: none; margin-bottom: 20px; width: 85%; max-width: 350px; text-align: center; color: #333; }
+        button { padding: 20px 50px; font-size: 1.3rem; cursor: pointer; border: none; border-radius: 50px; background: white; color: #2ecc71; font-weight: bold; }
+        #lock-info { position: fixed; bottom: 15px; font-size: 0.75rem; opacity: 0.5; }
+    </style>
+</head>
+<body>
 
-    let activeTag = null; 
-    let breadcrumbs = [];
-    let gpsWatchId = null;
-    let wakeLock = null;
+    <div id="status">Welcome</div>
+    <div id="sub-status">Enter name to begin</div>
 
-    // --- 1. MAXIMUM ACCURACY GPS ---
-    function startGlobalTracking() {
-        if ("geolocation" in navigator) {
-            gpsWatchId = navigator.geolocation.watchPosition((pos) => {
-                const now = new Date();
-                const totalMins = (now.getHours() * 60) + now.getMinutes();
-                
-                // Active Window Check
-                if (totalMins >= 165 && totalMins < 480) {
-                    // Accuracy check (lower = better). 30m is a safe 'high precision' threshold.
-                    if (pos.coords.accuracy < 30) {
+    <div id="input-container">
+        <input type="text" id="userName" placeholder="Type Name Here..." autocomplete="off">
+        <button id="startBtn">Begin Shift</button>
+    </div>
+
+    <div id="lock-info">Wake Lock: Inactive | GPS: Standby</div>
+
+    <script>
+        // Replace with your actual Google Apps Script URL
+        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbw1zfywpTM4ALHBRuIgDRTX8X5uBfQbR4Y7yRgjTg9FGKgD8jU_tKIhdmHBvXYFr0G7/exec"; 
+        
+        const body = document.body;
+        const statusDisplay = document.getElementById('status');
+        const subStatus = document.getElementById('sub-status');
+        const nameInput = document.getElementById('userName');
+        const inputContainer = document.getElementById('input-container');
+        const lockInfo = document.getElementById('lock-info');
+
+        let activeTag = null; 
+        let breadcrumbs = [];
+        let gpsWatchId = null;
+        let wakeLock = null;
+
+        // --- 1. HIGH ACCURACY GPS ---
+        function startGlobalTracking() {
+            if ("geolocation" in navigator) {
+                gpsWatchId = navigator.geolocation.watchPosition((pos) => {
+                    const now = new Date();
+                    const totalMins = (now.getHours() * 60) + now.getMinutes();
+                    
+                    // Logic for 02:45 to 08:00
+                    if (totalMins >= 165 && totalMins < 480) {
                         const pt = `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`;
-                        
-                        // Log only if moved from last point
-                        if (breadcrumbs[breadcrumbs.length - 1] !== pt) {
-                            breadcrumbs.push(pt);
-                            console.log("High-accuracy point recorded:", pt);
+                        // Record point if accuracy is decent
+                        if (pos.coords.accuracy < 50) { 
+                            if (breadcrumbs[breadcrumbs.length - 1] !== pt) {
+                                breadcrumbs.push(pt);
+                            }
                         }
                     }
-                }
-            }, 
-            (err) => console.warn("GPS Signal Lost: ", err), 
-            { 
-                enableHighAccuracy: true, // Force GPS hardware
-                maximumAge: 0,           // Disable cache
-                timeout: 5000            // Require fix every 5 seconds
-            });
-        }
-    }
-
-    // --- 2. DATA SYNC ---
-    async function syncToSheet(tagText, action) {
-        let mapLink = "N/A";
-        if (action === "OUT" && breadcrumbs.length > 0) {
-            // Standard static/dynamic path formatting
-            mapLink = "https://www.google.com/maps/dir/" + breadcrumbs.join("/");
+                }, 
+                (err) => console.warn("GPS Lost: ", err), 
+                { enableHighAccuracy: true, maximumAge: 0, timeout: 5000 });
+            }
         }
 
-        const payload = { 
-            tagText: tagText, 
-            name: nameInput.value, 
-            action: action, 
-            location: mapLink,
-            timestamp: new Date().toISOString() 
-        };
+        // --- 2. DATA SYNC ---
+        async function syncToSheet(tagText, action) {
+            let mapLink = "N/A";
+            if (action === "OUT" && breadcrumbs.length > 0) {
+                mapLink = "https://www.google.com/maps/dir/" + breadcrumbs.join("/");
+            }
 
-        fetch(WEB_APP_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
-    }
-
-    // --- 3. NFC LOGIC ---
-    async function startNFC() {
-        if ("NDEFReader" in window) {
-            const ndef = new NDEFReader();
-            await ndef.scan();
-            ndef.onreading = ({ message, serialNumber }) => {
-                let chipText = "";
-                const decoder = new TextDecoder();
-                for (const record of message.records) {
-                    if (record.recordType === "text") chipText = decoder.decode(record.data);
-                }
-                const currentId = chipText || serialNumber;
-
-                if (!activeTag) {
-                    activeTag = currentId;
-                    body.classList.add('amber');
-                    statusDisplay.innerText = "Location Active";
-                    subStatus.innerText = "Logged at: " + currentId;
-                    syncToSheet(currentId, "IN");
-                } else if (activeTag === currentId) {
-                    syncToSheet(currentId, "OUT");
-                    activeTag = null;
-                    breadcrumbs = []; // Reset for the next leg of the journey
-                    body.classList.remove('amber');
-                    statusDisplay.innerText = "Location Cleared";
-                    subStatus.innerText = "Ready for next Location";
-                    setTimeout(() => {
-                        statusDisplay.innerText = "Shift in Progress";
-                        subStatus.innerText = "Scan NFC to log";
-                    }, 2500);
-                }
+            const payload = { 
+                tagText: tagText, 
+                name: nameInput.value, 
+                action: action, 
+                location: mapLink,
+                timestamp: new Date().toISOString() 
             };
-        }
-    }
 
-    // --- 4. PERSISTENT WAKE LOCK ---
-    async function requestWakeLock() {
-        try {
-            wakeLock = await navigator.wakeLock.request('screen');
-            lockInfo.innerText = "Wake Lock: Active | GPS: High Accuracy";
-            
-            // Re-request if app is minimized and reopened
-            wakeLock.addEventListener('release', () => {
-                console.log('Wake Lock was released');
+            // Use fetch with no-cors for Google Apps Script
+            fetch(WEB_APP_URL, { 
+                method: 'POST', 
+                mode: 'no-cors', 
+                cache: 'no-cache',
+                body: JSON.stringify(payload) 
             });
-        } catch (err) {
-            lockInfo.innerText = "Wake Lock: Failed";
         }
-    }
 
-    // Handle visibility change to keep GPS/WakeLock alive
-    document.addEventListener('visibilitychange', async () => {
-        if (wakeLock !== null && document.visibilityState === 'visible') {
-            await requestWakeLock();
+        // --- 3. NFC LOGIC ---
+        async function startNFC() {
+            if ("NDEFReader" in window) {
+                try {
+                    const ndef = new NDEFReader();
+                    await ndef.scan();
+                    ndef.onreading = ({ message, serialNumber }) => {
+                        let chipText = "";
+                        const decoder = new TextDecoder();
+                        for (const record of message.records) {
+                            if (record.recordType === "text") chipText = decoder.decode(record.data);
+                        }
+                        const currentId = chipText || serialNumber;
+
+                        if (!activeTag) {
+                            activeTag = currentId;
+                            body.classList.add('amber');
+                            statusDisplay.innerText = "Location Active";
+                            subStatus.innerText = "Logged at: " + currentId;
+                            syncToSheet(currentId, "IN");
+                        } else if (activeTag === currentId) {
+                            syncToSheet(currentId, "OUT");
+                            activeTag = null;
+                            breadcrumbs = []; 
+                            body.classList.remove('amber');
+                            statusDisplay.innerText = "Location Cleared";
+                            subStatus.innerText = "Ready for next Location";
+                            setTimeout(() => {
+                                statusDisplay.innerText = "Shift in Progress";
+                                subStatus.innerText = "Scan NFC to log";
+                            }, 2500);
+                        }
+                    };
+                } catch (err) {
+                    alert("NFC Error: " + err);
+                }
+            } else {
+                alert("NFC not supported on this browser.");
+            }
         }
-    });
 
-    // --- 5. INITIALIZE ---
-    document.getElementById('startBtn').onclick = async () => { 
-        const name = nameInput.value.trim();
-        if(!name) return alert("Enter name");
-        
-        inputContainer.style.display = 'none';
-        
-        startGlobalTracking();
-        try { 
-            await startNFC(); 
+        // --- 4. WAKE LOCK ---
+        async function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    lockInfo.innerText = "Wake Lock: Active | GPS: High Accuracy";
+                } catch (err) {
+                    lockInfo.innerText = "Wake Lock: Failed";
+                }
+            }
+        }
+
+        // --- 5. INITIALIZE ---
+        document.getElementById('startBtn').addEventListener('click', async () => {
+            const name = nameInput.value.trim();
+            if(!name) return alert("Enter name");
+
+            inputContainer.style.display = 'none';
+            statusDisplay.innerText = "Initializing...";
+
+            startGlobalTracking();
+            await startNFC();
             await requestWakeLock();
+
             statusDisplay.innerText = "Shift Active: " + name;
-            subStatus.innerText = "NFC Scanner Ready";
-        } catch (e) { 
-            alert("Ensure Chrome on Android + HTTPS"); 
-        }
-    };
+            subStatus.innerText = "Scan NFC to begin";
+        });
 
-    function scheduleMorningReset() {
-        const now = new Date();
-        const resetTime = new Date();
-        resetTime.setHours(8, 0, 0, 0);
-        if (now > resetTime) resetTime.setDate(resetTime.getDate() + 1);
-        setTimeout(() => { location.reload(); }, resetTime - now);
-    }
-    scheduleMorningReset();
-</script>
+        // 8 AM RESET
+        function scheduleMorningReset() {
+            const now = new Date();
+            const resetTime = new Date();
+            resetTime.setHours(8, 0, 0, 0);
+            if (now > resetTime) resetTime.setDate(resetTime.getDate() + 1);
+            setTimeout(() => { location.reload(); }, resetTime - now);
+        }
+        scheduleMorningReset();
+    </script>
+</body>
+</html>
