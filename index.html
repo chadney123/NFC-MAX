@@ -159,7 +159,12 @@
 
             statusDisplay.innerText = "Shift Started: " + name;
             subStatus.innerText = "Scan NFC to begin first log";
-        };
+                   }
+                }, 3000);
+            } else {
+                statusDisplay.innerText = "Wrong Tag!";
+            }
+        }
 
         // --- 6. DAILY 8AM RESET ---
         function scheduleMorningReset() {
