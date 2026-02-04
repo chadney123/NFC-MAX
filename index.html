@@ -25,13 +25,12 @@
 
     <div id="input-container">
         <input type="text" id="userName" placeholder="Type Name Here..." autocomplete="off">
-        <button id="startBtn">Initialize Kiosk</button>
+        <button id="startBtn">Begin Shift</button>
     </div>
 
     <div id="lock-info">Wake Lock: Inactive | Reset: 08:00 AM</div>
 
     <script>
-        // --- 1. CONFIG & GLOBALS ---
         const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbyV9hrI821qxRTXG_gkjLQ9dxdVsOM3TUCPs2Ry-weiRuw66epZLYiIN11dH9UM8DkADQ/exec"; 
         const body = document.body;
         const statusDisplay = document.getElementById('status');
@@ -45,19 +44,61 @@
         let isProcessing = false;
         let wakeLock = null;
 
-        // Register Service Worker for PWA
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
 
-        // --- 2. HARDWARE CONTROL ---
-        async function requestWakeLock() {
-            if ('wakeLock' in navigator) {
+        // --- 1. NFC TEXT-PRIORITY READER ---
+        async function startNFC() {
+            if ("NDEFReader" in window) {
                 try {
-                    wakeLock = await navigator.wakeLock.request('screen');
-                    lockInfo.innerText = "Wake Lock: ACTIVE | Reset: 08:00 AM";
-                } catch (err) { lockInfo.innerText = "Wake Lock: Error (Retrying...)"; }
+                    const ndef = new NDEFReader();
+                    await ndef.scan();
+                    ndef.onreading = ({ message, serialNumber }) => {
+                        if (isProcessing) return;
+                        
+                        let extractedText = "";
+                        const decoder = new TextDecoder();
+                        
+                        // Loop through records to find specifically "text"
+                        for (const record of message.records) {
+                            if (record.recordType === "text") {
+                                extractedText = decoder.decode(record.data);
+                            }
+                        }
+                        
+                        // Use Text Record first; Fallback to Serial ID if text is empty
+                        const finalTagValue = extractedText || serialNumber;
+
+                        handleScan(finalTagValue);
+                        isProcessing = true;
+                        setTimeout(() => isProcessing = false, 3000);
+                    };
+                } catch (e) { console.error("NFC Error: ", e); }
             }
         }
 
+        function handleScan(tagValue) {
+            if (!activeTag) {
+                activeTag = tagValue;
+                localStorage.setItem('activeTag', activeTag);
+                updateUI("Location Active", "Logged at: " + tagValue, 'amber');
+                syncToSheet(tagValue, "IN");
+            } else if (activeTag === tagValue) {
+                syncToSheet(tagValue, "OUT");
+                activeTag = null;
+                breadcrumbs = [];
+                localStorage.removeItem('activeTag');
+                localStorage.removeItem('breadcrumbs');
+                updateUI("Location Cleared", "Ready for next Location", '');
+                setTimeout(() => { if(!activeTag) updateUI("Shift in Progress", "Scan NFC to log", ''); }, 2500);
+            } else {
+                const oldStatus = statusDisplay.innerText;
+                const oldSub = subStatus.innerText;
+                updateUI("Wrong Tag!", "Scan " + activeTag + " to exit", 'red');
+                setTimeout(() => { updateUI(oldStatus, oldSub, activeTag ? 'amber' : ''); }, 3000);
+            }
+        }
+
+        // --- 2. GPS & SYNC ---
         function startGlobalTracking() {
             if ("geolocation" in navigator) {
                 navigator.geolocation.watchPosition((pos) => {
@@ -74,54 +115,6 @@
             }
         }
 
-        async function startNFC() {
-            if ("NDEFReader" in window) {
-                try {
-                    const ndef = new NDEFReader();
-                    await ndef.scan();
-                    ndef.onreading = ({ message, serialNumber }) => {
-                        if (isProcessing) return;
-                        let chipText = "";
-                        const decoder = new TextDecoder();
-                        for (const record of message.records) {
-                            if (record.recordType === "text") chipText = decoder.decode(record.data);
-                        }
-                        const currentId = chipText || serialNumber;
-
-                        handleScan(currentId);
-                        isProcessing = true;
-                        setTimeout(() => isProcessing = false, 3000);
-                    };
-                } catch (e) { console.error("NFC Reset needed"); }
-            }
-        }
-
-        // --- 3. CORE LOGIC ---
-        function handleScan(currentId) {
-            if (!activeTag) {
-                // CLOCK IN
-                activeTag = currentId;
-                localStorage.setItem('activeTag', activeTag);
-                updateUI("Location Active", "Logged at: " + currentId, 'amber');
-                syncToSheet(currentId, "IN");
-            } else if (activeTag === currentId) {
-                // CLOCK OUT (SUCCESS)
-                syncToSheet(currentId, "OUT");
-                activeTag = null;
-                breadcrumbs = [];
-                localStorage.removeItem('activeTag');
-                localStorage.removeItem('breadcrumbs');
-                updateUI("Location Cleared", "Ready for next Location", '');
-                setTimeout(() => { if(!activeTag) updateUI("Shift in Progress", "Scan NFC to log", ''); }, 2500);
-            } else {
-                // WRONG TAG
-                const oldStatus = statusDisplay.innerText;
-                const oldSub = subStatus.innerText;
-                updateUI("Wrong Tag!", "Scan " + activeTag + " to exit", 'red');
-                setTimeout(() => { updateUI(oldStatus, oldSub, activeTag ? 'amber' : ''); }, 3000);
-            }
-        }
-
         async function syncToSheet(tagText, action) {
             let mapLink = "N/A";
             if (action === "OUT" && breadcrumbs.length > 0) {
@@ -131,56 +124,63 @@
             fetch(WEB_APP_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
         }
 
-        // --- 4. PERSISTENCE & RECOVERY ---
+        // --- 3. HARDWARE & RESET ---
+        async function requestWakeLock() {
+            if ('wakeLock' in navigator) {
+                try {
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    lockInfo.innerText = "Wake Lock: ACTIVE | Ready";
+                } catch (err) { lockInfo.innerText = "Wake Lock: Error"; }
+            }
+        }
+
+        function rehydrate() {
+            const savedName = localStorage.getItem('userName');
+            const lastResetDate = localStorage.getItem('lastResetDate');
+            const now = new Date();
+            const todayReset = new Date();
+            todayReset.setHours(8, 0, 0, 0);
+
+            // 8:00 AM Wipe
+            if (savedName && now > todayReset && (!lastResetDate || new Date(lastResetDate) < todayReset)) {
+                localStorage.clear();
+                localStorage.setItem('lastResetDate', now.toISOString());
+                location.reload();
+                return;
+            }
+
+            activeTag = localStorage.getItem('activeTag');
+            breadcrumbs = JSON.parse(localStorage.getItem('breadcrumbs')) || [];
+
+            if (savedName) {
+                inputContainer.style.display = 'none';
+                if (activeTag) {
+                    updateUI("Location Active", "Logged: " + activeTag, 'amber');
+                } else {
+                    updateUI("Shift Active: " + savedName, "Scan NFC to begin", '');
+                }
+                startGlobalTracking();
+                startNFC();
+                requestWakeLock();
+            }
+        }
+
         function updateUI(status, sub, bgColorClass) {
             statusDisplay.innerText = status;
             subStatus.innerText = sub;
             body.className = bgColorClass;
         }
 
-        // --- IMPROVED AUTO-RESET & RECOVERY ---
-function rehydrate() {
-    const savedName = localStorage.getItem('userName');
-    const lastResetDate = localStorage.getItem('lastResetDate');
-    const now = new Date();
-    
-    // Define today's 8 AM threshold
-    const todayReset = new Date();
-    todayReset.setHours(8, 0, 0, 0);
+        document.getElementById('startBtn').onclick = () => {
+            const name = nameInput.value.trim();
+            if (!name) return alert("Enter name");
+            localStorage.setItem('userName', name);
+            localStorage.setItem('lastResetDate', new Date().toISOString());
+            rehydrate();
+        };
 
-    // CRITICAL RESET LOGIC: 
-    // If we have a saved session, but the current time is past 8 AM 
-    // AND the last time we reset was BEFORE this morning's 8 AM... wipe it.
-    if (savedName && now > todayReset && (!lastResetDate || new Date(lastResetDate) < todayReset)) {
-        console.log("8:00 AM Threshold passed. Clearing session.");
-        localStorage.clear();
-        localStorage.setItem('lastResetDate', now.toISOString());
-        location.reload();
-        return;
-    }
-
-    activeTag = localStorage.getItem('activeTag');
-    breadcrumbs = JSON.parse(localStorage.getItem('breadcrumbs')) || [];
-
-    if (savedName) {
-        inputContainer.style.display = 'none';
-        if (activeTag) {
-            updateUI("Location Active", "Resumed at: " + activeTag, 'amber');
-        } else {
-            updateUI("Shift Active: " + savedName, "Scan NFC to begin", '');
-        }
-        startGlobalTracking();
-        startNFC();
-        requestWakeLock();
-    }
-}
-
-// Check every 30 seconds while the app is open
-setInterval(rehydrate, 30000); 
-
-// Handle fresh loads and waking up the screen
-window.onload = rehydrate;
-document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') rehydrate(); });
+        window.onload = rehydrate;
+        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') rehydrate(); });
     </script>
 </body>
 </html>
