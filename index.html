@@ -138,43 +138,49 @@
             body.className = bgColorClass;
         }
 
-        function rehydrate() {
-            const savedName = localStorage.getItem('userName');
-            activeTag = localStorage.getItem('activeTag');
-            breadcrumbs = JSON.parse(localStorage.getItem('breadcrumbs')) || [];
+        // --- IMPROVED AUTO-RESET & RECOVERY ---
+function rehydrate() {
+    const savedName = localStorage.getItem('userName');
+    const lastResetDate = localStorage.getItem('lastResetDate');
+    const now = new Date();
+    
+    // Define today's 8 AM threshold
+    const todayReset = new Date();
+    todayReset.setHours(8, 0, 0, 0);
 
-            if (savedName) {
-                inputContainer.style.display = 'none';
-                if (activeTag) {
-                    updateUI("Location Active", "Resumed at: " + activeTag, 'amber');
-                } else {
-                    updateUI("Shift Active: " + savedName, "Scan NFC to begin", '');
-                }
-                startGlobalTracking();
-                startNFC();
-                requestWakeLock();
-            }
+    // CRITICAL RESET LOGIC: 
+    // If we have a saved session, but the current time is past 8 AM 
+    // AND the last time we reset was BEFORE this morning's 8 AM... wipe it.
+    if (savedName && now > todayReset && (!lastResetDate || new Date(lastResetDate) < todayReset)) {
+        console.log("8:00 AM Threshold passed. Clearing session.");
+        localStorage.clear();
+        localStorage.setItem('lastResetDate', now.toISOString());
+        location.reload();
+        return;
+    }
+
+    activeTag = localStorage.getItem('activeTag');
+    breadcrumbs = JSON.parse(localStorage.getItem('breadcrumbs')) || [];
+
+    if (savedName) {
+        inputContainer.style.display = 'none';
+        if (activeTag) {
+            updateUI("Location Active", "Resumed at: " + activeTag, 'amber');
+        } else {
+            updateUI("Shift Active: " + savedName, "Scan NFC to begin", '');
         }
+        startGlobalTracking();
+        startNFC();
+        requestWakeLock();
+    }
+}
 
-        // Re-check state when screen turns on or app is resumed
-        document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') rehydrate(); });
-        window.onload = rehydrate;
+// Check every 30 seconds while the app is open
+setInterval(rehydrate, 30000); 
 
-        document.getElementById('startBtn').onclick = () => {
-            const name = nameInput.value.trim();
-            if (!name) return alert("Enter name");
-            localStorage.setItem('userName', name);
-            rehydrate();
-        };
-
-        // Morning Reset (8 AM)
-        setInterval(() => {
-            const now = new Date();
-            if (now.getHours() === 8 && now.getMinutes() === 0) {
-                localStorage.clear();
-                location.reload();
-            }
-        }, 60000);
+// Handle fresh loads and waking up the screen
+window.onload = rehydrate;
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') rehydrate(); });
     </script>
 </body>
 </html>
