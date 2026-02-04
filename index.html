@@ -53,7 +53,7 @@
             if ('wakeLock' in navigator) {
                 try {
                     wakeLock = await navigator.wakeLock.request('screen');
-                    lockInfo.innerText = "Wake Lock: ACTIVE | GPS: Ready";
+                    lockInfo.innerText = "Wake Lock: ACTIVE | App Ready";
                 } catch (err) { lockInfo.innerText = "Wake Lock: Error"; }
             }
         }
