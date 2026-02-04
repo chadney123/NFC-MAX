@@ -25,13 +25,15 @@
 
     <div id="input-container">
         <input type="text" id="userName" placeholder="Type Name Here..." autocomplete="off">
-        <button id="startBtn">Begin Shift</button>
+        <button id="startBtn">Initialize Kiosk</button>
     </div>
 
     <div id="lock-info">Wake Lock: Inactive | Reset: 08:00 AM</div>
 
     <script>
-        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbzcB7u-0KxZMRhA2Taoy3HvFs6YiwTFvxNJB5M5bFqzYbC4NLNexgtqiasxFBS3cJoKQA/exec"; 
+        // --- CONFIG ---
+        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxhd4MCcWlkfVKqzpWoRmIqNDrqZoNycPYkGFD7drbvmUn2g4updhy4tpKhpTgFFQir/exec"; 
+        
         const body = document.body;
         const statusDisplay = document.getElementById('status');
         const subStatus = document.getElementById('sub-status');
@@ -46,64 +48,29 @@
 
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
 
-        // --- 1. NFC TEXT-PRIORITY READER ---
-        async function startNFC() {
-            if ("NDEFReader" in window) {
+        // --- 1. SENSORS & HARDWARE ---
+        async function requestWakeLock() {
+            if ('wakeLock' in navigator) {
                 try {
-                    const ndef = new NDEFReader();
-                    await ndef.scan();
-                    ndef.onreading = ({ message, serialNumber }) => {
-                        if (isProcessing) return;
-                        
-                        let extractedText = "";
-                        const decoder = new TextDecoder();
-                        
-                        // Loop through records to find specifically "text"
-                        for (const record of message.records) {
-                            if (record.recordType === "text") {
-                                extractedText = decoder.decode(record.data);
-                            }
-                        }
-                        
-                        // Use Text Record first; Fallback to Serial ID if text is empty
-                        const finalTagValue = extractedText || serialNumber;
-
-                        handleScan(finalTagValue);
-                        isProcessing = true;
-                        setTimeout(() => isProcessing = false, 3000);
-                    };
-                } catch (e) { console.error("NFC Error: ", e); }
+                    wakeLock = await navigator.wakeLock.request('screen');
+                    lockInfo.innerText = "Wake Lock: ACTIVE | GPS: Ready";
+                } catch (err) { lockInfo.innerText = "Wake Lock: Error"; }
             }
         }
 
-        function handleScan(tagValue) {
-            if (!activeTag) {
-                activeTag = tagValue;
-                localStorage.setItem('activeTag', activeTag);
-                updateUI("Location Active", "Logged at: " + tagValue, 'amber');
-                syncToSheet(tagValue, "IN");
-            } else if (activeTag === tagValue) {
-                syncToSheet(tagValue, "OUT");
-                activeTag = null;
-                breadcrumbs = [];
-                localStorage.removeItem('activeTag');
-                localStorage.removeItem('breadcrumbs');
-                updateUI("Location Cleared", "Ready for next Location", '');
-                setTimeout(() => { if(!activeTag) updateUI("Shift in Progress", "Scan NFC to log", ''); }, 2500);
-            } else {
-                const oldStatus = statusDisplay.innerText;
-                const oldSub = subStatus.innerText;
-                updateUI("Wrong Tag!", "Scan " + activeTag + " to exit", 'red');
-                setTimeout(() => { updateUI(oldStatus, oldSub, activeTag ? 'amber' : ''); }, 3000);
+        // Heartbeat to keep screen alive
+        setInterval(() => {
+            if (localStorage.getItem('userName') && (!wakeLock || wakeLock.released)) {
+                requestWakeLock();
             }
-        }
+        }, 15000);
 
-        // --- 2. GPS & SYNC ---
         function startGlobalTracking() {
             if ("geolocation" in navigator) {
                 navigator.geolocation.watchPosition((pos) => {
                     const now = new Date();
                     const totalMins = (now.getHours() * 60) + now.getMinutes();
+                    // Tracking window logic (02:45 to 08:00)
                     if (totalMins >= 165 && totalMins < 480 && pos.coords.accuracy < 30) {
                         const pt = `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`;
                         if (breadcrumbs[breadcrumbs.length - 1] !== pt) {
@@ -115,23 +82,74 @@
             }
         }
 
+        async function startNFC() {
+            if ("NDEFReader" in window) {
+                try {
+                    const ndef = new NDEFReader();
+                    await ndef.scan();
+                    ndef.onreading = ({ message, serialNumber }) => {
+                        if (isProcessing) return;
+                        let extractedText = "";
+                        const decoder = new TextDecoder();
+                        for (const record of message.records) {
+                            if (record.recordType === "text") extractedText = decoder.decode(record.data);
+                        }
+                        const tagValue = extractedText || serialNumber;
+                        handleScan(tagValue);
+                        isProcessing = true;
+                        setTimeout(() => isProcessing = false, 3000);
+                    };
+                } catch (e) { console.warn("NFC Read Error", e); }
+            }
+        }
+
+        // --- 2. CORE LOGIC ---
+        function handleScan(tagValue) {
+            if (!activeTag) {
+                // CLOCK IN
+                activeTag = tagValue;
+                localStorage.setItem('activeTag', activeTag);
+                updateUI("Location Active", "Logged at: " + tagValue, 'amber');
+                syncToSheet(tagValue, "IN");
+            } else if (activeTag === tagValue) {
+                // CLOCK OUT
+                syncToSheet(tagValue, "OUT");
+                activeTag = null;
+                breadcrumbs = [];
+                localStorage.removeItem('activeTag');
+                localStorage.removeItem('breadcrumbs');
+                updateUI("Location Cleared", "Ready for next Location", '');
+                setTimeout(() => { if(!activeTag) updateUI("Shift in Progress", "Scan NFC to log", ''); }, 2500);
+            } else {
+                // WRONG TAG
+                const oldStatus = statusDisplay.innerText;
+                const oldSub = subStatus.innerText;
+                updateUI("Wrong Tag!", "Scan " + activeTag + " to exit", 'red');
+                setTimeout(() => { updateUI(oldStatus, oldSub, activeTag ? 'amber' : ''); }, 3000);
+            }
+        }
+
         async function syncToSheet(tagText, action) {
             let mapLink = "N/A";
             if (action === "OUT" && breadcrumbs.length > 0) {
                 mapLink = "https://www.google.com/maps/dir/" + breadcrumbs.join("/");
             }
-            const payload = { tagText, name: localStorage.getItem('userName'), action, location: mapLink, timestamp: new Date().toISOString() };
+            const payload = { 
+                tagText, 
+                name: localStorage.getItem('userName'), 
+                shiftStarted: localStorage.getItem('shiftStarted'),
+                action, 
+                location: mapLink, 
+                timestamp: new Date().toISOString() 
+            };
             fetch(WEB_APP_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
         }
 
-        // --- 3. HARDWARE & RESET ---
-        async function requestWakeLock() {
-            if ('wakeLock' in navigator) {
-                try {
-                    wakeLock = await navigator.wakeLock.request('screen');
-                    lockInfo.innerText = "Wake Lock: ACTIVE | Ready";
-                } catch (err) { lockInfo.innerText = "Wake Lock: Error"; }
-            }
+        // --- 3. PERSISTENCE & RESET ---
+        function updateUI(status, sub, bgColorClass) {
+            statusDisplay.innerText = status;
+            subStatus.innerText = sub;
+            body.className = bgColorClass;
         }
 
         function rehydrate() {
@@ -141,7 +159,7 @@
             const todayReset = new Date();
             todayReset.setHours(8, 0, 0, 0);
 
-            // 8:00 AM Wipe
+            // 8:00 AM Reset Logic
             if (savedName && now > todayReset && (!lastResetDate || new Date(lastResetDate) < todayReset)) {
                 localStorage.clear();
                 localStorage.setItem('lastResetDate', now.toISOString());
@@ -165,15 +183,15 @@
             }
         }
 
-        function updateUI(status, sub, bgColorClass) {
-            statusDisplay.innerText = status;
-            subStatus.innerText = sub;
-            body.className = bgColorClass;
-        }
-
         document.getElementById('startBtn').onclick = () => {
             const name = nameInput.value.trim();
             if (!name) return alert("Enter name");
+            
+            // Set 1st Login Timestamp
+            if (!localStorage.getItem('shiftStarted')) {
+                localStorage.setItem('shiftStarted', new Date().toISOString());
+            }
+            
             localStorage.setItem('userName', name);
             localStorage.setItem('lastResetDate', new Date().toISOString());
             rehydrate();
