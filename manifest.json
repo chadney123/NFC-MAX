@@ -1,9 +1,18 @@
 {
   "name": "Shift Tracker Pro",
   "short_name": "ShiftTracker",
+  "description": "Professional Room & Shift Tracking Kiosk",
   "start_url": "index.html",
-  "display": "standalone", 
+  "display": "standalone",
   "background_color": "#2ecc71",
   "theme_color": "#2ecc71",
-  "orientation": "portrait"
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "https://cdn-icons-png.flaticon.com/512/1162/1162283.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
 }
