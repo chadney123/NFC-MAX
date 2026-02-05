@@ -31,7 +31,6 @@
     <div id="lock-info">Wake Lock: Inactive | Reset: 08:00 AM</div>
 
     <script>
-        // --- CONFIG ---
         const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxYj70yt2dPIzGL4b_sNl9nohlLsseD9C-krHbJiz_y6gYnK4M8ws0PbAt422WVv-g0Gg/exec"; 
         
         const body = document.body;
@@ -48,6 +47,15 @@
 
         if ('serviceWorker' in navigator) { navigator.serviceWorker.register('sw.js'); }
 
+        // --- BACK BUTTON TRAP ---
+        function disableBackButton() {
+            window.history.pushState(null, null, window.location.href);
+            window.onpopstate = function() {
+                window.history.pushState(null, null, window.location.href);
+            };
+        }
+        disableBackButton();
+
         // --- 1. SENSORS & HARDWARE ---
         async function requestWakeLock() {
             if ('wakeLock' in navigator) {
@@ -58,7 +66,6 @@
             }
         }
 
-        // Heartbeat to keep screen alive
         setInterval(() => {
             if (localStorage.getItem('userName') && (!wakeLock || wakeLock.released)) {
                 requestWakeLock();
@@ -70,7 +77,6 @@
                 navigator.geolocation.watchPosition((pos) => {
                     const now = new Date();
                     const totalMins = (now.getHours() * 60) + now.getMinutes();
-                    // Tracking window logic (02:45 to 08:00)
                     if (totalMins >= 165 && totalMins < 480 && pos.coords.accuracy < 30) {
                         const pt = `${pos.coords.latitude.toFixed(6)},${pos.coords.longitude.toFixed(6)}`;
                         if (breadcrumbs[breadcrumbs.length - 1] !== pt) {
@@ -103,16 +109,13 @@
             }
         }
 
-        // --- 2. CORE LOGIC ---
         function handleScan(tagValue) {
             if (!activeTag) {
-                // CLOCK IN
                 activeTag = tagValue;
                 localStorage.setItem('activeTag', activeTag);
                 updateUI("Location Active", "Logged at: " + tagValue, 'amber');
                 syncToSheet(tagValue, "IN");
             } else if (activeTag === tagValue) {
-                // CLOCK OUT
                 syncToSheet(tagValue, "OUT");
                 activeTag = null;
                 breadcrumbs = [];
@@ -121,7 +124,6 @@
                 updateUI("Location Cleared", "Ready for next Location", '');
                 setTimeout(() => { if(!activeTag) updateUI("Shift in Progress", "Scan NFC to log", ''); }, 2500);
             } else {
-                // WRONG TAG
                 const oldStatus = statusDisplay.innerText;
                 const oldSub = subStatus.innerText;
                 updateUI("Wrong Tag!", "Scan " + activeTag + " to exit", 'red');
@@ -145,7 +147,6 @@
             fetch(WEB_APP_URL, { method: 'POST', mode: 'no-cors', body: JSON.stringify(payload) });
         }
 
-        // --- 3. PERSISTENCE & RESET ---
         function updateUI(status, sub, bgColorClass) {
             statusDisplay.innerText = status;
             subStatus.innerText = sub;
@@ -159,7 +160,6 @@
             const todayReset = new Date();
             todayReset.setHours(8, 0, 0, 0);
 
-            // 8:00 AM Reset Logic
             if (savedName && now > todayReset && (!lastResetDate || new Date(lastResetDate) < todayReset)) {
                 localStorage.clear();
                 localStorage.setItem('lastResetDate', now.toISOString());
@@ -186,12 +186,9 @@
         document.getElementById('startBtn').onclick = () => {
             const name = nameInput.value.trim();
             if (!name) return alert("Enter name");
-            
-            // Set 1st Login Timestamp
             if (!localStorage.getItem('shiftStarted')) {
                 localStorage.setItem('shiftStarted', new Date().toISOString());
             }
-            
             localStorage.setItem('userName', name);
             localStorage.setItem('lastResetDate', new Date().toISOString());
             rehydrate();
