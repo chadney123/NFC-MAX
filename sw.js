@@ -1,7 +1,9 @@
-self.addEventListener('install', (e) => {
+// This file allows the app to be "installed" without the Chrome badge
+self.addEventListener('install', (event) => {
   self.skipWaiting();
 });
 
-self.addEventListener('fetch', (e) => {
-  e.respondWith(fetch(e.request));
+self.addEventListener('fetch', (event) => {
+  // Acts as a dummy proxy to satisfy PWA requirements
+  event.respondWith(fetch(event.request));
 });
