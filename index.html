@@ -31,6 +31,13 @@
     <div id="lock-info">Wake Lock: Inactive | Reset: 08:00 AM</div>
 
     <script>
+        
+if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js')
+      .then(() => console.log("Service Worker Registered"))
+      .catch(err => console.log("SW Registration Failed", err));
+}
+        
         const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxYj70yt2dPIzGL4b_sNl9nohlLsseD9C-krHbJiz_y6gYnK4M8ws0PbAt422WVv-g0Gg/exec"; 
         
         const body = document.body;
