@@ -1,9 +1,17 @@
-// This file allows the app to be "installed" without the Chrome badge
+const CACHE_NAME = 'shift-tracker-v1';
+const ASSETS = [
+  'index.html',
+  'manifest.json'
+];
+
 self.addEventListener('install', (event) => {
-  self.skipWaiting();
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS))
+  );
 });
 
 self.addEventListener('fetch', (event) => {
-  // Acts as a dummy proxy to satisfy PWA requirements
-  event.respondWith(fetch(event.request));
+  event.respondWith(
+    fetch(event.request).catch(() => caches.match(event.request))
+  );
 });
